@@ -729,20 +729,39 @@ manage_realm_menu() {
         echo "  2. 删除已有转发规则"
         echo "  3. 重启 Realm 转发服务"
         echo "  4. 停止 Realm 转发服务"
-        echo "  0. 返回主菜单"
+        echo "  0. 返回上级主菜单 (支持按 q)"
         echo "=========================================================="
-        printf "请输入选项 [0-4]: "
+        printf "请输入选项 [0-4 或 q]: "
         read_input R_CHOICE
         case "$R_CHOICE" in
-            1) add_realm_rule "" "" ;;
-            2) delete_realm_rule "" ;;
-            3) rc-service realm restart && echo "✅ 服务已重启。" ;;
-            4) rc-service realm stop && echo "⏹️ 服务已停止。" ;;
-            0) break ;;
-            *) echo "输入无效。" ;;
+            1)
+                add_realm_rule "" ""
+                printf "\n按回车键继续..."
+                read_input DUMMY
+                ;;
+            2)
+                delete_realm_rule ""
+                printf "\n按回车键继续..."
+                read_input DUMMY
+                ;;
+            3)
+                rc-service realm restart && echo "✅ 服务已重启。"
+                printf "\n按回车键继续..."
+                read_input DUMMY
+                ;;
+            4)
+                rc-service realm stop && echo "⏹️ 服务已停止。"
+                printf "\n按回车键继续..."
+                read_input DUMMY
+                ;;
+            0|q|Q)
+                break
+                ;;
+            *)
+                echo "⚠️ 输入无效，请重新选择。"
+                sleep 1
+                ;;
         esac
-        printf "\n按回车键继续..."
-        read_input DUMMY
     done
 }
 
@@ -1659,9 +1678,9 @@ manage_nodes_menu() {
         echo "  5. 切换安全审计与防滥用护盾 (当前将切换为: ${SHIELD_OPT})"
         echo "  6. 重启/重载 Sing-box 服务"
         echo "  7. 停止 Sing-box 服务"
-        echo "  0. 返回主菜单"
+        echo "  0. 返回上级主菜单 (支持按 q)"
         echo "=========================================================="
-        printf "👉 请选择操作 [0-7]: "
+        printf "👉 请选择操作 [0-7 或 q]: "
         read_input SUB_CHOICE
         case "$SUB_CHOICE" in
             1)
@@ -1700,10 +1719,12 @@ manage_nodes_menu() {
                 printf "\n按回车键继续..."
                 read_input _DUMMY
                 ;;
-            0)
+            0|q|Q)
                 break
                 ;;
             *)
+                echo "⚠️ 输入无效，请重新选择。"
+                sleep 1
                 ;;
         esac
     done
@@ -2157,6 +2178,7 @@ EOF_JSON
 
 install_subskiff_agent_bin() {
     _FORCE_UPDATE="${1:-false}"
+    _SPEC_VER="${2:-}"
     _AGENT_BIN=$(get_subskiff_bin)
     _BASE_DIR=$(get_subskiff_dir)
     echo "=========================================================="
@@ -2178,20 +2200,38 @@ install_subskiff_agent_bin() {
         return 0
     fi
 
-    # 内置官方 GitHub Release 稳定直链与最新 fallback
-    _GH_URL="https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-$_TARGET_ARCH"
-    _GH_FALLBACK="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent"
+    # 智能解析指定版本号 (自适应 0.2.0 与 v0.2.0)
+    _GH_URLS=()
+    if [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && [ "$_SPEC_VER" != "main" ]; then
+        _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
+        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}")
+        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}")
+    else
+        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-${_TARGET_ARCH}")
+        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent")
+    fi
 
-    echo "[*] 正在从内置 GitHub Release 下载最新探针内核..."
-    echo "  优先链接: $_GH_URL"
-    if curl -fksSL --connect-timeout 10 --max-time 60 --retry 2 -o "$_AGENT_BIN.tmp" "$_GH_URL" || \
-       curl -fksSL --connect-timeout 10 --max-time 60 --retry 2 -o "$_AGENT_BIN.tmp" "$_GH_FALLBACK"; then
+    _SUCCESS=false
+    echo "[*] 正在从 GitHub Release 下载探针内核..."
+    for _U in "${_GH_URLS[@]}"; do
+        echo "  尝试拉取: $_U"
+        if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_AGENT_BIN.tmp" "$_U"; then
+            if [ -s "$_AGENT_BIN.tmp" ] && [ $(wc -c < "$_AGENT_BIN.tmp") -ge 500000 ]; then
+                _SUCCESS=true
+                break
+            fi
+        fi
+        rm -f "$_AGENT_BIN.tmp"
+    done
+
+    if [ "$_SUCCESS" = true ]; then
         mv -f "$_AGENT_BIN.tmp" "$_AGENT_BIN"
         chmod +x "$_AGENT_BIN"
         echo "✅ subskiff-agent 探针二进制已成功就绪并赋权！"
+        return 0
     else
         rm -f "$_AGENT_BIN.tmp"
-        warn "从 GitHub 下载探针失败，请检查 VPS 的外网连通性。"
+        warn "❌ 探针内核下载校验失败，已保留原文件，请检查版本号或网络连通性。"
         return 1
     fi
 }
@@ -2327,9 +2367,9 @@ manage_subskiff_menu() {
         echo "  3. 开启/停用 周期心跳与状态上报 (Crontab)"
         echo "  4. 立即同步一次节点到轻舟 (前台回显)"
         echo "  5. 查看当前探针运行状态与日志"
-        echo "  0. 返回上级主菜单"
+        echo "  0. 返回上级主菜单 (支持按 q)"
         echo "=========================================================="
-        printf "请输入对应数字 [0-5]: "
+        printf "请输入对应数字 [0-5 或 q]: "
         read_input _S_CHOICE
 
         case "$_S_CHOICE" in
@@ -2358,12 +2398,170 @@ manage_subskiff_menu() {
                 printf "\n按回车键继续..."
                 read_input _
                 ;;
-            0|*)
+            0|q|Q)
                 break
+                ;;
+            *)
+                echo "⚠️ 输入无效，请重新选择。"
+                sleep 1
                 ;;
         esac
     done
 }
+
+# ==================== 模块 8: LDNAT 工具箱与探针更新中心 ====================
+
+update_ldnat_script() {
+    _SPEC_VER="${1:-}"
+    _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+    if [ ! -f "$_REAL_PATH" ]; then
+        _REAL_PATH="/usr/local/bin/ldnat"
+    fi
+
+    echo "=========================================================="
+    echo "      🔄 更新 ldnat.sh 脚本自身                           "
+    echo "=========================================================="
+    echo "  本地目标路径: $_REAL_PATH"
+
+    _V_WITH_V=""
+    _V_NO_V=""
+    _BRANCH="main"
+    if [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && [ "$_SPEC_VER" != "main" ] && [ "$_SPEC_VER" != "master" ]; then
+        _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
+        _V_WITH_V="v${_CLEAN_V}"
+        _V_NO_V="${_CLEAN_V}"
+        _BRANCH=""
+    else
+        [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && _BRANCH="$_SPEC_VER"
+    fi
+
+    _URLS=()
+    if [ -n "$_BRANCH" ]; then
+        _URLS+=("https://raw.githubusercontent.com/jojhaa/ldnat/${_BRANCH}/ldnat.sh")
+        _URLS+=("https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_BRANCH}/ldnat.sh")
+    else
+        _URLS+=("https://raw.githubusercontent.com/jojhaa/ldnat/${_V_WITH_V}/ldnat.sh")
+        _URLS+=("https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_WITH_V}/ldnat.sh")
+        _URLS+=("https://raw.githubusercontent.com/jojhaa/ldnat/${_V_NO_V}/ldnat.sh")
+        _URLS+=("https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_NO_V}/ldnat.sh")
+    fi
+
+    _TMP_FILE="/tmp/ldnat_new.$.sh"
+    rm -f "$_TMP_FILE"
+    _SUCCESS=false
+
+    echo "[*] 正在从 GitHub 拉取脚本代码..."
+    for _U in "${_URLS[@]}"; do
+        echo "  尝试拉取: $_U"
+        if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_TMP_FILE" "$_U"; then
+            if [ -s "$_TMP_FILE" ] && [ $(wc -c < "$_TMP_FILE") -ge 20000 ] && grep -q 'register_command' "$_TMP_FILE"; then
+                if sh -n "$_TMP_FILE" 2>/dev/null; then
+                    _SUCCESS=true
+                    break
+                fi
+            fi
+        fi
+        rm -f "$_TMP_FILE"
+    done
+
+    if [ "$_SUCCESS" = true ]; then
+        cp -f "$_REAL_PATH" "${_REAL_PATH}.bak" 2>/dev/null || true
+        mv -f "$_TMP_FILE" "$_REAL_PATH"
+        chmod +x "$_REAL_PATH"
+        mkdir -p /usr/local/bin
+        if [ "$_REAL_PATH" != "/usr/local/bin/ldnat" ]; then
+            ln -sf "$_REAL_PATH" /usr/local/bin/ldnat
+        fi
+        echo "=========================================================="
+        echo "🎉 ldnat.sh 脚本已成功更新至最新！"
+        echo "=========================================================="
+        return 0
+    else
+        rm -f "$_TMP_FILE"
+        warn "❌ 脚本拉取校验失败，已保留原本地文件，请检查版本号或网络连通性。"
+        return 1
+    fi
+}
+
+update_all_components() {
+    _SPEC_VER="${1:-}"
+    echo "=========================================================="
+    echo "      🚀 执行一键全量更新 (探针内核 + ldnat.sh 脚本)       "
+    echo "=========================================================="
+    
+    echo "[1/2] 正在更新 subskiff-agent 轻舟探针..."
+    install_subskiff_agent_bin force "$_SPEC_VER" || true
+    echo ""
+
+    echo "[2/2] 正在更新 ldnat.sh 脚本自身..."
+    if update_ldnat_script "$_SPEC_VER"; then
+        _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+        [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
+        echo "[*] 正在平滑无缝重载工具箱..."
+        sleep 1
+        exec "$_REAL_PATH"
+    fi
+}
+
+manage_update_menu() {
+    while true; do
+        clear 2>/dev/null || true
+        _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+        echo "=========================================================="
+        echo "      🔄 LDNAT 工具箱与探针组件更新中心                   "
+        echo "=========================================================="
+        echo "  当前脚本位置: $_REAL_PATH"
+        echo "  当前探针内核: /usr/local/subskiff/subskiff-agent"
+        echo ""
+        echo "  1. 🚀 一键全量更新 (同时更新 ldnat.sh 脚本 + 轻舟探针内核) [默认推荐]"
+        echo "  2. 仅更新 ldnat.sh 脚本自身"
+        echo "  3. 仅更新 subskiff-agent 轻舟探针内核"
+        echo "  0. 返回上级主菜单 (支持按 q)"
+        echo "=========================================================="
+        printf "请输入选项 [0-3 或 q, 回车默认 1]: "
+        read_input _U_CHOICE
+        [ -z "$_U_CHOICE" ] && _U_CHOICE="1"
+
+        case "$_U_CHOICE" in
+            0|q|Q)
+                break
+                ;;
+            1)
+                echo ""
+                printf "👉 请输入目标版本号/分支 (例如 0.2.0 或 v0.2.0)\n   [直接回车默认拉取最新 main/latest]: "
+                read_input _USER_VER
+                update_all_components "$_USER_VER"
+                ;;
+            2)
+                echo ""
+                printf "👉 请输入目标版本号/分支 (例如 0.2.0 或 v0.2.0)\n   [直接回车默认拉取最新 main 分支]: "
+                read_input _USER_VER
+                if update_ldnat_script "$_USER_VER"; then
+                    _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+                    [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
+                    echo "[*] 正在平滑无缝重载工具箱..."
+                    sleep 1
+                    exec "$_REAL_PATH"
+                fi
+                printf "\n按回车键继续..."
+                read_input _
+                ;;
+            3)
+                echo ""
+                printf "👉 请输入目标版本号 (例如 0.2.0 或 v0.2.0)\n   [直接回车默认拉取最新 Release]: "
+                read_input _USER_VER
+                install_subskiff_agent_bin force "$_USER_VER"
+                printf "\n按回车键继续..."
+                read_input _
+                ;;
+            *)
+                echo "⚠️ 输入无效，请重新选择。"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 
 # ==================== 命令行路由分支 ====================
 
@@ -2565,6 +2763,29 @@ if [ "${1:-}" = "sync" ]; then
     exit 0
 fi
 
+# 7.5. 全能更新中心分支 (update/upgrade)
+if [ "${1:-}" = "update" ] || [ "${1:-}" = "upgrade" ]; then
+    shift
+    _TARGET_SUB="${1:-}"
+    case "$_TARGET_SUB" in
+        script)
+            shift
+            update_ldnat_script "${1:-}"
+            exit 0
+            ;;
+        agent|subskiff)
+            shift
+            install_subskiff_agent_bin force "${1:-}"
+            exit 0
+            ;;
+        *)
+            # 支持 ldnat update [version] 全量更新
+            update_all_components "$_TARGET_SUB"
+            exit 0
+            ;;
+    esac
+fi
+
 # 8. 传参模式 (Flag 传参 - 兼容旧版参数)
 IS_FLAG=false
 DDNS_ONLY=false
@@ -2611,47 +2832,57 @@ if [ "$IS_FLAG" = "true" ]; then
     exit 0
 fi
 
-# 9. 纯交互主菜单 (直接敲 ldnat)
-clear 2>/dev/null || true
-echo "=========================================================="
-echo "      🚀 LDNAT - Alpine 落地与中转全能工具箱               "
-echo "=========================================================="
-echo "  1. 节点多端口与全协议服务管理 (REALITY/SS/AnyTLS/Hy2/TUIC/Trojan)"
-echo "  2. Realm 高性能多端口转发管理 (增/删/查/改/启停)"
-echo "  3. 部署/更新 Cloudflare DDNS 动态域名"
-echo "  4. 系统 TCP 与 BBR 深度网络调优 (支持 10M~5000M 自适应)"
-echo "  5. 查看当前所有配置、转发规则与二维码 (支持 A+B 导出)"
-echo "  6. 快速网络与服务健康诊断"
-echo "  7. 轻舟云端协同与探针管理 (SubSkiff Agent)"
-echo "  0. 退出"
-echo "=========================================================="
-printf "请输入对应数字 [0-7]: "
-read_input CHOICE
+# 9. 纯交互主菜单 (直接敲 ldnat，常驻循环避免子菜单返回闪退)
+while true; do
+    clear 2>/dev/null || true
+    echo "=========================================================="
+    echo "      🚀 LDNAT - Alpine 落地与中转全能工具箱               "
+    echo "=========================================================="
+    echo "  1. 节点多端口与全协议服务管理 (REALITY/SS/AnyTLS/Hy2/TUIC/Trojan)"
+    echo "  2. Realm 高性能多端口转发管理 (增/删/查/改/启停)"
+    echo "  3. 部署/更新 Cloudflare DDNS 动态域名"
+    echo "  4. 系统 TCP 与 BBR 深度网络调优 (支持 10M~5000M 自适应)"
+    echo "  5. 查看当前所有配置、转发规则与二维码 (支持 A+B 导出)"
+    echo "  6. 快速网络与服务健康诊断"
+    echo "  7. 轻舟云端协同与探针管理 (SubSkiff Agent)"
+    echo "  8. 🔄 检查与更新系统组件 (支持 ldnat.sh 与轻舟探针同时更新)"
+    echo "  0. 退出运行 (支持按 q)"
+    echo "=========================================================="
+    printf "请输入对应数字 [0-8 或 q]: "
+    read_input CHOICE
 
-case "$CHOICE" in
-    1)
-        manage_nodes_menu
-        ;;
-    2)
-        manage_realm_menu
-        ;;
-    3)
-        install_ddns_module "" "" ""
-        ;;
-    4)
-        optimize_tcp_bbr ""
-        ;;
-    5)
-        view_node_info
-        ;;
-    6)
-        diagnose_network
-        ;;
-    7)
-        manage_subskiff_menu
-        ;;
-    *)
-        echo "退出运行。"
-        exit 0
-        ;;
-esac
+    case "$CHOICE" in
+        1)
+            manage_nodes_menu
+            ;;
+        2)
+            manage_realm_menu
+            ;;
+        3)
+            install_ddns_module "" "" ""
+            ;;
+        4)
+            optimize_tcp_bbr ""
+            ;;
+        5)
+            view_node_info
+            ;;
+        6)
+            diagnose_network
+            ;;
+        7)
+            manage_subskiff_menu
+            ;;
+        8)
+            manage_update_menu
+            ;;
+        0|q|Q|exit)
+            echo "感谢使用 LDNAT 工具箱，已退出运行。"
+            exit 0
+            ;;
+        *)
+            echo "⚠️ 输入无效，请重新输入 [0-8 或 q]..."
+            sleep 1
+            ;;
+    esac
+done
