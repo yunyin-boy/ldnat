@@ -2153,6 +2153,7 @@ EOF_JSON
 }
 
 install_subskiff_agent_bin() {
+    _FORCE_UPDATE="${1:-false}"
     _AGENT_BIN=$(get_subskiff_bin)
     _BASE_DIR=$(get_subskiff_dir)
     echo "=========================================================="
@@ -2167,41 +2168,27 @@ install_subskiff_agent_bin() {
 
     echo "[*] 检测到系统架构: $_ARCH ($_TARGET_ARCH)"
 
-    # 优先检查同级目录是否已存在 subskiff-agent
-    if [ -f "$_BASE_DIR/subskiff-agent" ] && [ -s "$_BASE_DIR/subskiff-agent" ]; then
+    # 非强制更新模式下，若本地已存在可执行文件则跳过
+    if [ "$_FORCE_UPDATE" != "force" ] && [ -f "$_BASE_DIR/subskiff-agent" ] && [ -s "$_BASE_DIR/subskiff-agent" ]; then
         chmod +x "$_AGENT_BIN"
         echo "✅ 本地已存在 subskiff-agent 探针，权限已就绪！"
         return 0
     fi
 
-    printf "请输入 subskiff-agent 二进制下载 URL (回车尝试从轻舟服务端拉取): "
-    read_input _AGENT_URL
-    if [ -z "$_AGENT_URL" ]; then
-        _AGENT_CFG=$(get_subskiff_cfg)
-        if [ -f "$_AGENT_CFG" ]; then
-            if command -v jq >/dev/null 2>&1; then
-                _SERVER_URL=$(jq -r '.server_url // empty' "$_AGENT_CFG" 2>/dev/null || true)
-            else
-                _SERVER_URL=$(grep -oE '"server_url"[[:space:]]*:[[:space:]]*"[^"]+"' "$_AGENT_CFG" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)
-            fi
-            if [ -n "$_SERVER_URL" ]; then
-                _AGENT_URL="${_SERVER_URL%/}/static/agent/subskiff-agent-linux-$_TARGET_ARCH"
-            fi
-        fi
-    fi
+    # 内置官方 GitHub Release 稳定直链与最新 fallback
+    _GH_URL="https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-$_TARGET_ARCH"
+    _GH_FALLBACK="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent"
 
-    if [ -z "$_AGENT_URL" ]; then
-        _AGENT_URL="https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-$_TARGET_ARCH"
-    fi
-
-    echo "[*] 正在下载探针: $_AGENT_URL"
-    if curl -fksSL --connect-timeout 10 -o "$_AGENT_BIN.tmp" "$_AGENT_URL"; then
+    echo "[*] 正在从内置 GitHub Release 下载最新探针内核..."
+    echo "  优先链接: $_GH_URL"
+    if curl -fksSL --connect-timeout 10 --max-time 60 --retry 2 -o "$_AGENT_BIN.tmp" "$_GH_URL" || \
+       curl -fksSL --connect-timeout 10 --max-time 60 --retry 2 -o "$_AGENT_BIN.tmp" "$_GH_FALLBACK"; then
         mv -f "$_AGENT_BIN.tmp" "$_AGENT_BIN"
         chmod +x "$_AGENT_BIN"
-        echo "✅ subskiff-agent 安装成功！"
+        echo "✅ subskiff-agent 探针二进制已成功就绪并赋权！"
     else
         rm -f "$_AGENT_BIN.tmp"
-        warn "探针下载失败，请检查网络或手动上传至: $_AGENT_BIN"
+        warn "从 GitHub 下载探针失败，请检查 VPS 的外网连通性。"
         return 1
     fi
 }
@@ -2349,7 +2336,7 @@ manage_subskiff_menu() {
                 read_input _
                 ;;
             2)
-                install_subskiff_agent_bin
+                install_subskiff_agent_bin force
                 printf "\n按回车键继续..."
                 read_input _
                 ;;
@@ -2534,6 +2521,10 @@ if [ "${1:-}" = "agent" ] || [ "${1:-}" = "subskiff" ]; then
     case "$_SUBCMD" in
         sync|push|once)
             run_subskiff_once
+            exit 0
+            ;;
+        update|upgrade)
+            install_subskiff_agent_bin force
             exit 0
             ;;
         config|bind)
