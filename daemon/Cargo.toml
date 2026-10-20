@@ -1,0 +1,18 @@
+[package]
+name = "subskiff-daemon"
+version = "0.3.0"
+edition = "2021"
+description = "SubSkiff Lightweight Linux Server Metrics & System Daemon"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
+rand = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

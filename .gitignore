@@ -5,6 +5,10 @@ config.json
 # Large binary files (distribute via GitHub Releases)
 subskiff-agent
 subskiff-agent*
+subskiff-daemon
+subskiff-daemon*
+*.tar.gz
+daemon/target/
 
 # Development test suites & hardware modules (excluded from public repo)
 probe/

@@ -2013,7 +2013,14 @@ get_subskiff_dir() {
 }
 
 get_subskiff_bin() {
-    echo "$(get_subskiff_dir)/subskiff-agent"
+    _BASE="$(get_subskiff_dir)"
+    if [ -f "$_BASE/subskiff-daemon" ]; then
+        echo "$_BASE/subskiff-daemon"
+    elif [ -f "$_BASE/subskiff-agent" ]; then
+        echo "$_BASE/subskiff-agent"
+    else
+        echo "$_BASE/subskiff-daemon"
+    fi
 }
 
 get_subskiff_cfg() {
@@ -2183,10 +2190,10 @@ EOF_JSON
 install_subskiff_agent_bin() {
     _FORCE_UPDATE="${1:-false}"
     _SPEC_VER="${2:-}"
-    _AGENT_BIN=$(get_subskiff_bin)
     _BASE_DIR=$(get_subskiff_dir)
+    _DAEMON_BIN="$_BASE_DIR/subskiff-daemon"
     echo "=========================================================="
-    echo "      📥 部署/更新 轻舟探针 (Rust 静态 musl 版)           "
+    echo "   📥 部署/更新 轻舟守护进程 (SubSkiff Daemon 静态 musl)   "
     echo "=========================================================="
     _ARCH=$(uname -m)
     case "$_ARCH" in
@@ -2198,10 +2205,11 @@ install_subskiff_agent_bin() {
     echo "[*] 检测到系统架构: $_ARCH ($_TARGET_ARCH)"
 
     # 非强制更新模式下，若未指定版本且本地已存在可执行文件则跳过
-    if [ "$_FORCE_UPDATE" != "force" ] && [ -z "$_SPEC_VER" ] && [ -f "$_BASE_DIR/subskiff-agent" ] && [ -s "$_BASE_DIR/subskiff-agent" ]; then
-        chmod +x "$_AGENT_BIN"
-        _CUR_V=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
-        echo "✅ 本地已存在 subskiff-agent 探针: $_CUR_V"
+    if [ "$_FORCE_UPDATE" != "force" ] && [ -z "$_SPEC_VER" ] && [ -f "$_DAEMON_BIN" ] && [ -s "$_DAEMON_BIN" ]; then
+        chmod +x "$_DAEMON_BIN"
+        _CUR_V=$("$_DAEMON_BIN" --version 2>/dev/null || echo "已就绪")
+        echo "✅ 本地已存在 subskiff-daemon 守护进程: $_CUR_V"
+        ln -sf "$_DAEMON_BIN" "$_BASE_DIR/subskiff-agent" 2>/dev/null || true
         return 0
     fi
 
@@ -2217,44 +2225,58 @@ install_subskiff_agent_bin() {
             _U1="$_SPEC_VER"
             ;;
         ""|latest|main|master)
-            echo "[*] 采用默认策略: 动态拉取 GitHub Releases 最新版 (latest)"
-            _U1="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent-linux-${_TARGET_ARCH}"
-            _U2="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent"
-            _U3="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@main/subskiff-agent"
+            echo "[*] 采用默认策略: 动态拉取 GitHub Releases 最新版 (优先 .tar.gz 安全归档包)"
+            _U1="https://github.com/yunyin-boy/ldnat/releases/latest/download/subskiff-daemon-linux-${_TARGET_ARCH}.tar.gz"
+            _U2="https://github.com/yunyin-boy/ldnat/releases/latest/download/subskiff-daemon"
+            _U3="https://fastly.jsdelivr.net/gh/yunyin-boy/ldnat@main/subskiff-daemon"
             ;;
         *)
             _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
             echo "[*] 锁定拉取指定版本: v${_CLEAN_V}"
-            _U1="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
-            _U2="https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
-            _U3="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent"
-            _U4="https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent"
+            _U1="https://github.com/yunyin-boy/ldnat/releases/download/v${_CLEAN_V}/subskiff-daemon-linux-${_TARGET_ARCH}.tar.gz"
+            _U2="https://github.com/yunyin-boy/ldnat/releases/download/v${_CLEAN_V}/subskiff-daemon"
+            _U3="https://github.com/yunyin-boy/ldnat/releases/download/${_CLEAN_V}/subskiff-daemon-linux-${_TARGET_ARCH}.tar.gz"
+            _U4="https://github.com/yunyin-boy/ldnat/releases/download/${_CLEAN_V}/subskiff-daemon"
             ;;
     esac
 
+    _TMP_FILE="$_BASE_DIR/subskiff_dl.$$.tmp"
+    rm -f "$_TMP_FILE"
     _SUCCESS=false
-    echo "[*] 正在从云端下载探针内核..."
+    echo "[*] 正在从云端下载守护进程资产..."
     for _U in "$_U1" "$_U2" "$_U3" "$_U4"; do
         [ -z "$_U" ] && continue
         echo "  尝试拉取: $_U"
-        if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_AGENT_BIN.tmp" "$_U"; then
-            if [ -s "$_AGENT_BIN.tmp" ] && [ $(wc -c < "$_AGENT_BIN.tmp") -ge 500000 ]; then
-                _SUCCESS=true
-                break
+        if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_TMP_FILE" "$_U"; then
+            if [ -s "$_TMP_FILE" ] && [ $(wc -c < "$_TMP_FILE") -ge 200000 ]; then
+                # 检查是否为 tar.gz 压缩包
+                if tar -tzf "$_TMP_FILE" >/dev/null 2>&1; then
+                    echo "  📦 检测到合规 .tar.gz 压缩包，正在自动安全解包..."
+                    if tar -xzf "$_TMP_FILE" -C "$_BASE_DIR" subskiff-daemon 2>/dev/null; then
+                        _SUCCESS=true
+                        break
+                    fi
+                elif [ $(wc -c < "$_TMP_FILE") -ge 500000 ]; then
+                    # 裸二进制
+                    mv -f "$_TMP_FILE" "$_DAEMON_BIN"
+                    _SUCCESS=true
+                    break
+                fi
             fi
         fi
-        rm -f "$_AGENT_BIN.tmp"
+        rm -f "$_TMP_FILE"
     done
 
-    if [ "$_SUCCESS" = true ]; then
-        mv -f "$_AGENT_BIN.tmp" "$_AGENT_BIN"
-        chmod +x "$_AGENT_BIN"
-        _NEW_V=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
-        echo "✅ subskiff-agent 探针二进制已成功就绪并赋权！($_NEW_V)"
+    rm -f "$_TMP_FILE"
+
+    if [ "$_SUCCESS" = true ] && [ -f "$_DAEMON_BIN" ]; then
+        chmod +x "$_DAEMON_BIN"
+        ln -sf "$_DAEMON_BIN" "$_BASE_DIR/subskiff-agent" 2>/dev/null || true
+        _NEW_V=$("$_DAEMON_BIN" --version 2>/dev/null || echo "已就绪")
+        echo "✅ subskiff-daemon 守护进程已成功就绪并赋权！($_NEW_V)"
         return 0
     else
-        rm -f "$_AGENT_BIN.tmp"
-        warn "❌ 探针内核下载校验失败，已保留原文件，请检查版本号、直链或网络连通性。"
+        warn "❌ 守护进程资产下载校验失败，已保留原文件，请检查版本号、直链或网络连通性。"
         return 1
     fi
 }
@@ -2388,13 +2410,13 @@ manage_subskiff_menu() {
             _AGENT_VER=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
         fi
         echo "=========================================================="
-        echo "   📡 LDNAT - 轻舟云端协同与探针管理 [内核: ${_AGENT_VER}]"
+        echo "   📡 LDNAT - 轻舟云端协同与守护进程管理 [当前: ${_AGENT_VER}]"
         echo "=========================================================="
         echo "  1. 绑定/修改 轻舟服务端连接 (URL 与 Node Token)"
-        echo "  2. 部署/更新 轻舟探针 (Rust 静态 musl 二进制)"
+        echo "  2. 部署/更新 轻舟守护进程 (SubSkiff Daemon 静态 musl)"
         echo "  3. 开启/停用 周期心跳与状态上报 (Crontab)"
         echo "  4. 立即同步一次节点到轻舟 (前台回显)"
-        echo "  5. 查看当前探针运行状态与日志"
+        echo "  5. 查看当前守护进程运行状态与日志"
         echo "  0. 返回上级主菜单 (支持按 q)"
         echo "=========================================================="
         printf "请输入对应数字 [0-5 或 q]: "
@@ -2467,17 +2489,17 @@ update_ldnat_script() {
             ;;
         ""|latest|main|master)
             echo "[*] 采用默认策略: 动态拉取 GitHub main/latest 最新脚本"
-            _U1="https://raw.githubusercontent.com/jojhaa/ldnat/main/ldnat.sh"
-            _U2="https://github.com/jojhaa/ldnat/releases/latest/download/ldnat.sh"
-            _U3="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@main/ldnat.sh"
+            _U1="https://raw.githubusercontent.com/yunyin-boy/ldnat/main/ldnat.sh"
+            _U2="https://github.com/yunyin-boy/ldnat/releases/latest/download/ldnat.sh"
+            _U3="https://fastly.jsdelivr.net/gh/yunyin-boy/ldnat@main/ldnat.sh"
             ;;
         *)
             _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
             echo "[*] 锁定拉取指定版本: v${_CLEAN_V}"
-            _U1="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/ldnat.sh"
-            _U2="https://raw.githubusercontent.com/jojhaa/ldnat/v${_CLEAN_V}/ldnat.sh"
-            _U3="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@v${_CLEAN_V}/ldnat.sh"
-            _U4="https://raw.githubusercontent.com/jojhaa/ldnat/${_CLEAN_V}/ldnat.sh"
+            _U1="https://github.com/yunyin-boy/ldnat/releases/download/v${_CLEAN_V}/ldnat.sh"
+            _U2="https://raw.githubusercontent.com/yunyin-boy/ldnat/v${_CLEAN_V}/ldnat.sh"
+            _U3="https://fastly.jsdelivr.net/gh/yunyin-boy/ldnat@v${_CLEAN_V}/ldnat.sh"
+            _U4="https://raw.githubusercontent.com/yunyin-boy/ldnat/${_CLEAN_V}/ldnat.sh"
             ;;
     esac
 
@@ -2586,14 +2608,14 @@ manage_update_menu() {
             _AGENT_VER=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
         fi
         echo "=========================================================="
-        echo "      🔄 LDNAT 工具箱与探针组件更新中心                   "
+        echo "      🔄 LDNAT 工具箱与守护组件更新中心                   "
         echo "=========================================================="
         echo "  当前脚本版本: ${LDNAT_VERSION} (${_REAL_PATH})"
-        echo "  当前探针内核: ${_AGENT_VER} (${_AGENT_BIN})"
+        echo "  当前守护进程: ${_AGENT_VER} (${_AGENT_BIN})"
         echo ""
-        echo "  1. 🚀 一键全量更新 (同时更新 ldnat.sh 脚本 + 轻舟探针内核) [默认推荐]"
+        echo "  1. 🚀 一键全量更新 (同时更新 ldnat.sh 脚本 + 轻舟守护进程) [默认推荐]"
         echo "  2. 仅更新 ldnat.sh 脚本自身"
-        echo "  3. 仅更新 subskiff-agent 轻舟探针内核"
+        echo "  3. 仅更新 subskiff-daemon 轻舟守护进程"
         echo "  0. 返回上级主菜单 (支持按 q)"
         echo "=========================================================="
         printf "请输入选项 [0-3 或 q, 回车默认 1]: "
@@ -2872,7 +2894,7 @@ if [ "${1:-}" = "update" ] || [ "${1:-}" = "upgrade" ]; then
             fi
             exit 0
             ;;
-        agent|subskiff)
+        daemon|agent|subskiff)
             shift
             install_subskiff_agent_bin force "${1:-}"
             exit 0
