@@ -518,6 +518,20 @@ init_realm_rules() {
         done < "$REALM_CONFIG"
     fi
     [ -f "$REALM_RULES" ] || touch "$REALM_RULES"
+
+    # 自动安全清洗历史规则：去除 Windows \r、全角冒号、非法不可见乱码字符
+    if [ -s "$REALM_RULES" ]; then
+        TMP_CLEAN=$(mktemp /etc/realm/rules.clean.XXXXXX 2>/dev/null || echo "/tmp/rules.clean.$$")
+        tr -d '\r' < "$REALM_RULES" 2>/dev/null | \
+            sed 's/：/:/g' | \
+            tr -cd '[:alnum:] .:\n_-' | \
+            awk 'NF>=2 { print $1, $2 }' > "$TMP_CLEAN" 2>/dev/null || true
+        if [ -s "$TMP_CLEAN" ]; then
+            mv -f "$TMP_CLEAN" "$REALM_RULES"
+        else
+            rm -f "$TMP_CLEAN"
+        fi
+    fi
 }
 
 ensure_realm_installed() {
@@ -542,8 +556,8 @@ ensure_realm_installed() {
         cp -f "$WORK_DIR/realm" "$REALM_BIN"
     fi
 
-    if [ ! -f /etc/init.d/realm ]; then
-        cat << 'SVC' > /etc/init.d/realm
+    # 确保 OpenRC 服务脚本具备日志落盘与错误追踪能力
+    cat << 'SVC' > /etc/init.d/realm
 #!/sbin/openrc-run
 name="realm"
 description="Realm Port Forward Service"
@@ -551,20 +565,68 @@ command="/usr/local/bin/realm"
 command_args="-c /etc/realm/config.toml"
 command_background=true
 pidfile="/run/realm.pid"
+output_log="/var/log/realm.log"
+error_log="/var/log/realm.log"
 depend() {
     need net
     after firewall
 }
 SVC
-        chmod 755 /etc/init.d/realm
-        rc-update add realm default >/dev/null 2>&1 || true
+    chmod 755 /etc/init.d/realm
+    rc-update add realm default >/dev/null 2>&1 || true
+}
+
+is_realm_port_listening() {
+    CHK_PORT="$1"
+    [ -n "$CHK_PORT" ] || return 1
+    # 1. 尝试 netstat
+    if command -v netstat >/dev/null 2>&1; then
+        if netstat -tlpn 2>/dev/null | grep -Eq "(:|:::)${CHK_PORT}[[:space:]]+"; then
+            return 0
+        fi
+    fi
+    # 2. 尝试 ss
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tlpn 2>/dev/null | grep -Eq ":${CHK_PORT}[[:space:]]+"; then
+            return 0
+        fi
+    fi
+    # 3. 尝试 /proc/net/tcp 端口十六进制匹配 (Linux 内核原生支持)
+    HEX_P=$(printf '%04X' "$CHK_PORT" 2>/dev/null)
+    if [ -n "$HEX_P" ] && grep -qi ":${HEX_P} " /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+restart_realm_service() {
+    ensure_realm_installed
+    echo ">>> 正在启动/重载 Realm 转发服务..."
+    killall -9 realm >/dev/null 2>&1 || true
+    rm -f /run/realm.pid
+    rc-service realm restart >/dev/null 2>&1 || rc-service realm start >/dev/null 2>&1 || true
+    sleep 0.8
+
+    if pgrep -x realm >/dev/null 2>&1; then
+        echo "✅ Realm 转发服务运行正常 (PID: $(pgrep -x realm | tr '\n' ' '))。"
+        return 0
+    else
+        echo "❌ Realm 进程启动失败！"
+        if [ -s /var/log/realm.log ]; then
+            echo "--- 错误日志 (/var/log/realm.log) ---"
+            tail -n 10 /var/log/realm.log
+            echo "------------------------------------"
+        fi
+        echo "💡 尝试前台测试输出:"
+        /usr/local/bin/realm -c /etc/realm/config.toml 2>&1 | head -n 10 || true
+        return 1
     fi
 }
 
 sync_realm_config() {
     init_realm_rules
     mkdir -p /etc/realm
-    TMP_CONF=$(mktemp /etc/realm/config.tmp.XXXXXX)
+    TMP_CONF=$(mktemp /etc/realm/config.tmp.XXXXXX 2>/dev/null || echo "/tmp/realm.conf.$$")
     cat << 'EOF' > "$TMP_CONF"
 [network]
 no_tcp = false
@@ -575,6 +637,14 @@ EOF
     while IFS=' ' read -r L_P R_A || [ -n "$L_P" ]; do
         [ -n "$L_P" ] && [ -n "$R_A" ] || continue
         case "$L_P" in '#'*|'') continue ;; esac
+
+        # 严格清洗端口与目标地址中的非法字符
+        L_P=$(printf '%s' "$L_P" | tr -cd '0-9')
+        R_A=$(printf '%s' "$R_A" | tr -d '\r\n\t ' | sed 's/：/:/g' | tr -cd '[:alnum:].:_-')
+        [ -n "$L_P" ] && [ -n "$R_A" ] || continue
+        valid_port "$L_P" || continue
+        case "$R_A" in *:*) ;; *) continue ;; esac
+
         RULE_COUNT=$((RULE_COUNT + 1))
         cat << EOF >> "$TMP_CONF"
 
@@ -587,7 +657,7 @@ EOF
     mv -f "$TMP_CONF" "$REALM_CONFIG"
 
     if [ "$RULE_COUNT" -gt 0 ]; then
-        rc-service realm restart >/dev/null 2>&1 || rc-service realm start >/dev/null 2>&1 || true
+        restart_realm_service
     else
         rc-service realm stop >/dev/null 2>&1 || true
     fi
@@ -612,7 +682,7 @@ list_realm_rules() {
         case "$L_P" in '#'*|'') continue ;; esac
         INDEX=$((INDEX + 1))
         STATUS="⚪ 未监听"
-        if netstat -tlpn 2>/dev/null | grep -Eq ":${L_P}[[:space:]]+"; then
+        if is_realm_port_listening "$L_P"; then
             STATUS="🟢 监听中"
         fi
         printf " [%2d]   %-12s  --> %-24s %s\n" "$INDEX" "$L_P" "$R_A" "$STATUS"
@@ -628,9 +698,12 @@ add_realm_rule() {
         while true; do
             printf "👉 请输入中转机【本地监听端口】(例如 10086): "
             read_input LOCAL_PORT
+            LOCAL_PORT=$(printf '%s' "$LOCAL_PORT" | tr -cd '0-9')
             if valid_port "$LOCAL_PORT"; then break; fi
             echo "❌ 端口不合法，请输入 1-65535 之间的纯数字！"
         done
+    else
+        LOCAL_PORT=$(printf '%s' "$LOCAL_PORT" | tr -cd '0-9')
     fi
     valid_port "$LOCAL_PORT" || die '本地监听端口必须是 1-65535 的数字！'
 
@@ -638,11 +711,22 @@ add_realm_rule() {
         while true; do
             printf "👉 请输入目标落地地址与端口 (例如 1.2.3.4:20086 或 hk.example.com:20086): "
             read_input REMOTE_ADDR
+            # 自动清洗输入，剔除不可见字符、特殊空格、替换全角冒号
+            REMOTE_ADDR=$(printf '%s' "$REMOTE_ADDR" | tr -d '\r\n\t ' | sed 's/：/:/g' | tr -cd '[:alnum:].:_-')
             case "$REMOTE_ADDR" in
-                *:*) break ;;
+                *:*)
+                    R_HOST="${REMOTE_ADDR%:*}"
+                    R_PORT="${REMOTE_ADDR##*:}"
+                    if [ -n "$R_HOST" ] && valid_port "$R_PORT"; then
+                        break
+                    fi
+                    echo "❌ 目标端口必须为 1-65535 之间的数字！"
+                    ;;
                 *) echo "❌ 格式不正确！必须包含 IP/域名和端口，例如 1.2.3.4:20086" ;;
             esac
         done
+    else
+        REMOTE_ADDR=$(printf '%s' "$REMOTE_ADDR" | tr -d '\r\n\t ' | sed 's/：/:/g' | tr -cd '[:alnum:].:_-')
     fi
     case "$REMOTE_ADDR" in
         *:*) ;;
@@ -660,7 +744,7 @@ add_realm_rule() {
         read_input OVERWRITE_ANS
         case "$OVERWRITE_ANS" in
             y*|Y*)
-                TMP_RULES=$(mktemp /etc/realm/rules.tmp.XXXXXX)
+                TMP_RULES=$(mktemp /etc/realm/rules.tmp.XXXXXX 2>/dev/null || echo "/tmp/rules.tmp.$$")
                 awk -v p="$LOCAL_PORT" -v r="$REMOTE_ADDR" '{ if ($1 == p) print p, r; else print $0 }' "$REALM_RULES" > "$TMP_RULES"
                 mv -f "$TMP_RULES" "$REALM_RULES"
                 ;;
@@ -680,7 +764,7 @@ add_realm_rule() {
     echo "🎉 规则添加/更新成功！"
     echo "   - 本地监听端口 : ${LOCAL_PORT} (TCP + UDP)"
     echo "   - 目标落地地址 : ${REMOTE_ADDR}"
-    echo "   - 服务运行状态 : $(rc-service realm status 2>/dev/null || echo 'running')"
+    echo "   - 监听状态     : $(if is_realm_port_listening "$LOCAL_PORT"; then echo '🟢 正在监听'; else echo '⚪ 未监听 (请查看日志)'; fi)"
     echo "=========================================================="
 }
 
@@ -712,7 +796,7 @@ delete_realm_rule() {
         return 1
     fi
 
-    TMP_RULES=$(mktemp /etc/realm/rules.tmp.XXXXXX)
+    TMP_RULES=$(mktemp /etc/realm/rules.tmp.XXXXXX 2>/dev/null || echo "/tmp/rules.del.$$")
     awk -v p="$DEL_PORT" '$1 != p' "$REALM_RULES" > "$TMP_RULES"
     mv -f "$TMP_RULES" "$REALM_RULES"
 
@@ -729,13 +813,14 @@ manage_realm_menu() {
         echo "=========================================================="
         list_realm_rules
         echo ""
-        echo "  1. 添加新的转发规则 (支持多个端口)"
+        echo "  1. 添加新的转发规则"
         echo "  2. 删除已有转发规则"
         echo "  3. 重启 Realm 转发服务"
         echo "  4. 停止 Realm 转发服务"
+        echo "  5. 查看 Realm 运行日志与诊断"
         echo "  0. 返回上级主菜单 (支持按 q)"
         echo "=========================================================="
-        printf "请输入选项 [0-4 或 q]: "
+        printf "请输入选项 [0-5 或 q]: "
         read_input R_CHOICE
         case "$R_CHOICE" in
             1)
@@ -749,12 +834,26 @@ manage_realm_menu() {
                 read_input DUMMY
                 ;;
             3)
-                rc-service realm restart && echo "✅ 服务已重启。"
+                restart_realm_service
                 printf "\n按回车键继续..."
                 read_input DUMMY
                 ;;
             4)
-                rc-service realm stop && echo "⏹️ 服务已停止。"
+                rc-service realm stop >/dev/null 2>&1 || true
+                killall -9 realm >/dev/null 2>&1 || true
+                echo "⏹️ 服务已停止。"
+                printf "\n按回车键继续..."
+                read_input DUMMY
+                ;;
+            5)
+                echo "=== Realm 运行日志 (/var/log/realm.log) ==="
+                if [ -s /var/log/realm.log ]; then
+                    tail -n 30 /var/log/realm.log
+                else
+                    echo "(暂无日志文件或日志为空)"
+                fi
+                echo "=== 当前进程状态 ==="
+                ps aux | grep '[r]ealm' || echo "未发现 realm 运行进程"
                 printf "\n按回车键继续..."
                 read_input DUMMY
                 ;;
