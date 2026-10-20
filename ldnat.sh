@@ -1902,6 +1902,26 @@ EOF
 
 # ==================== 模块 7: 轻舟端侧协同与探针管理 (SubSkiff) ====================
 
+get_local_machine_id() {
+    if [ -s /etc/machine-id ]; then
+        head -n1 /etc/machine-id | tr -d ' \n\r'
+    elif [ -s /var/lib/dbus/machine-id ]; then
+        head -n1 /var/lib/dbus/machine-id | tr -d ' \n\r'
+    elif [ -s /sys/class/dmi/id/product_uuid ]; then
+        head -n1 /sys/class/dmi/id/product_uuid | tr -d ' \n\r'
+    elif [ -s "$(get_subskiff_dir)/.subskiff_mid" ]; then
+        head -n1 "$(get_subskiff_dir)/.subskiff_mid" | tr -d ' \n\r'
+    else
+        _RAND_ID="mid_$(cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | cut -b1-16)"
+        echo "$_RAND_ID" > "$(get_subskiff_dir)/.subskiff_mid" 2>/dev/null || true
+        echo "$_RAND_ID"
+    fi
+}
+
+get_local_hostname() {
+    hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "vps_host"
+}
+
 get_subskiff_dir() {
     dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")"
 }
@@ -2000,10 +2020,15 @@ configure_subskiff() {
         *) _SET_AUTO="true" ;;
     esac
 
+    _MY_MID=$(get_local_machine_id)
+    _MY_HOST=$(get_local_hostname)
+
     cat << EOF_JSON > "$_AGENT_CFG"
 {
   "server_url": "${_INPUT_URL%/}",
   "node_token": "$_INPUT_TOKEN",
+  "machine_id": "$_MY_MID",
+  "hostname": "$_MY_HOST",
   "node_source": "$INFO_FILE",
   "report_interval_sec": $_INPUT_INTERVAL,
   "auto_sync_on_change": $_SET_AUTO,
@@ -2024,10 +2049,15 @@ quick_bind_subskiff() {
     [ -n "$_INPUT_URL" ] || die "服务端地址不能为空。"
     [ -n "$_INPUT_TOKEN" ] || die "Token 不能为空。"
 
+    _MY_MID=$(get_local_machine_id)
+    _MY_HOST=$(get_local_hostname)
+
     cat << EOF_JSON > "$_AGENT_CFG"
 {
   "server_url": "${_INPUT_URL%/}",
   "node_token": "$_INPUT_TOKEN",
+  "machine_id": "$_MY_MID",
+  "hostname": "$_MY_HOST",
   "node_source": "$INFO_FILE",
   "report_interval_sec": $_INPUT_INTERVAL,
   "auto_sync_on_change": true,
@@ -2038,6 +2068,8 @@ EOF_JSON
     echo "✅ 轻舟连接配置已成功保存！"
     echo "  服务端地址: ${_INPUT_URL%/}"
     echo "  通信 Token: ${_INPUT_TOKEN:0:4}****"
+    echo "  机器标识码: $_MY_MID"
+    echo "  系统主机名: $_MY_HOST"
     echo "  配置文件: $_AGENT_CFG"
 
     # 若未安装探针，尝试自动拉取安装
