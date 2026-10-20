@@ -4,6 +4,7 @@ config.json
 
 # Large binary files (distribute via GitHub Releases)
 subskiff-agent
+subskiff-agent*
 
 # Development test suites & hardware modules (excluded from public repo)
 probe/
