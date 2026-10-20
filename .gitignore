@@ -1,0 +1,15 @@
+# Runtime configurations & logs
+config.json
+*.log
+
+# Large binary files (distribute via GitHub Releases)
+subskiff-agent
+
+# Development test suites & hardware modules (excluded from public repo)
+probe/
+scratch/
+hardware_10sim_gateway/
+
+# Extra documents (only README.md retained per specification)
+licenses/
+THIRD_PARTY_NOTICES.md

@@ -1,0 +1,12 @@
+{
+  "server_url": "https://api.yourdomain.com",
+  "node_token": "sk_live_xxxxxxxxxxxxxx",
+  "machine_id": "vps-node-01",
+  "hostname": "vps-node-01",
+  "node_source": "/root/node_info.txt",
+  "report_interval_sec": 300,
+  "auto_sync_on_change": true,
+  "request_timeout_sec": 5,
+  "enable_ippure": true,
+  "enable_cf_trace": true
+}
