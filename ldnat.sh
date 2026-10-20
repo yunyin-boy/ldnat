@@ -1453,6 +1453,7 @@ add_node_rule() {
     _COUNTRY=$(printf '%s' "$_IP_JSON" | grep -oE '"country"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | cut -d'"' -f4 || true)
     _CITY=$(printf '%s' "$_IP_JSON" | grep -oE '"city"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | cut -d'"' -f4 || true)
     _IS_RES=$(printf '%s' "$_IP_JSON" | grep -oE '"isResidential"[[:space:]]*:[[:space:]]*(true|false)' | head -n1 | cut -d':' -f2 | tr -d ' ' || true)
+    _IS_BC=$(printf '%s' "$_IP_JSON" | grep -oE '"isBroadcast"[[:space:]]*:[[:space:]]*(true|false)' | head -n1 | cut -d':' -f2 | tr -d ' ' || true)
     _SCORE=$(printf '%s' "$_IP_JSON" | grep -oE '"fraudScore"[[:space:]]*:[[:space:]]*[0-9]+' | head -n1 | cut -d':' -f2 | tr -d ' ' || echo "0")
 
     _FLAG="🌐"
@@ -1489,12 +1490,14 @@ add_node_rule() {
 
     _RES_TEXT="机房"
     [ "$_IS_RES" = "true" ] && _RES_TEXT="家宽"
+    _BC_TEXT="原生"
+    [ "$_IS_BC" = "true" ] && _BC_TEXT="广播"
     _LOC_TEXT="$_COUNTRY"
     [ -n "$_CITY" ] && _LOC_TEXT="${_COUNTRY}·${_CITY}"
 
-    # 模板 4 默认名称：{国旗} {国家·城市} ｜ 原生 ｜ 家宽/机房 ｜ {分数}分
+    # 模板 4 默认名称：{国旗} {国家·城市} ｜ {原生/广播} ｜ {家宽/机房} ｜ {分数}分
     if [ -n "$_COUNTRY" ]; then
-        DEFAULT_NAME="${_FLAG} ${_LOC_TEXT} ｜ 原生 ｜ ${_RES_TEXT} ｜ ${_SCORE}分"
+        DEFAULT_NAME="${_FLAG} ${_LOC_TEXT} ｜ ${_BC_TEXT} ｜ ${_RES_TEXT} ｜ ${_SCORE}分"
     else
         DEFAULT_NAME="${TARGET_TYPE}-${NEW_PORT}"
     fi
