@@ -1445,12 +1445,65 @@ add_node_rule() {
         fi
     done
 
+    # 自动访问 IPPure 接口获取第一手画像并生成模板 4 标准名称
+    echo "[*] 正在请求 my.ippure.com 获取本地网络画像与风控分..."
+    _IP_JSON=$(curl -sL --connect-timeout 4 -m 6 "https://my.ippure.com/v1/info" 2>/dev/null || true)
+
+    _CC=$(printf '%s' "$_IP_JSON" | grep -oE '"countryCode"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | cut -d'"' -f4 | tr 'a-z' 'A-Z' || true)
+    _COUNTRY=$(printf '%s' "$_IP_JSON" | grep -oE '"country"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | cut -d'"' -f4 || true)
+    _CITY=$(printf '%s' "$_IP_JSON" | grep -oE '"city"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | cut -d'"' -f4 || true)
+    _IS_RES=$(printf '%s' "$_IP_JSON" | grep -oE '"isResidential"[[:space:]]*:[[:space:]]*(true|false)' | head -n1 | cut -d':' -f2 | tr -d ' ' || true)
+    _SCORE=$(printf '%s' "$_IP_JSON" | grep -oE '"fraudScore"[[:space:]]*:[[:space:]]*[0-9]+' | head -n1 | cut -d':' -f2 | tr -d ' ' || echo "0")
+
+    _FLAG="🌐"
+    case "$_CC" in
+        TH) _FLAG="🇹🇭"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Thailand" ] && _COUNTRY="泰国" ;;
+        VN) _FLAG="🇻🇳"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Vietnam" ] && _COUNTRY="越南" ;;
+        HK) _FLAG="🇭🇰"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Hong Kong" ] && _COUNTRY="香港" ;;
+        US) _FLAG="🇺🇸"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "United States" ] && _COUNTRY="美国" ;;
+        JP) _FLAG="🇯🇵"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Japan" ] && _COUNTRY="日本" ;;
+        SG) _FLAG="🇸🇬"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Singapore" ] && _COUNTRY="新加坡" ;;
+        KR) _FLAG="🇰🇷"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Korea" ] && _COUNTRY="韩国" ;;
+        TW) _FLAG="🇹🇼"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Taiwan" ] && _COUNTRY="台湾" ;;
+        GB) _FLAG="🇬🇧"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "United Kingdom" ] && _COUNTRY="英国" ;;
+        DE) _FLAG="🇩🇪"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "Germany" ] && _COUNTRY="德国" ;;
+        FR) _FLAG="🇫🇷"; [ -z "$_COUNTRY" ] || [ "$_COUNTRY" = "France" ] && _COUNTRY="法国" ;;
+    esac
+
+    case "$_CITY" in
+        Bangkok) _CITY="曼谷" ;;
+        Hanoi) _CITY="河内" ;;
+        "Ho Chi Minh City") _CITY="胡志明" ;;
+        "Tung Chung") _CITY="东涌" ;;
+        Kowloon) _CITY="九龙" ;;
+        Central) _CITY="中环" ;;
+        Tokyo) _CITY="东京" ;;
+        Osaka) _CITY="大阪" ;;
+        "Los Angeles") _CITY="洛杉矶" ;;
+        "San Jose") _CITY="圣何塞" ;;
+        "New York") _CITY="纽约" ;;
+        London) _CITY="伦敦" ;;
+        Frankfurt) _CITY="法兰克福" ;;
+        Singapore) _CITY="新加坡" ;;
+    esac
+
+    _RES_TEXT="机房"
+    [ "$_IS_RES" = "true" ] && _RES_TEXT="家宽"
+    _LOC_TEXT="$_COUNTRY"
+    [ -n "$_CITY" ] && _LOC_TEXT="${_COUNTRY}·${_CITY}"
+
+    # 模板 4 默认名称：{国旗} {国家·城市} ｜ 原生 ｜ 家宽/机房 ｜ {分数}分
+    if [ -n "$_COUNTRY" ]; then
+        DEFAULT_NAME="${_FLAG} ${_LOC_TEXT} ｜ 原生 ｜ ${_RES_TEXT} ｜ ${_SCORE}分"
+    else
+        DEFAULT_NAME="${TARGET_TYPE}-${NEW_PORT}"
+    fi
+
     # 询问节点备注名称
-    DEFAULT_NAME="${TARGET_TYPE}-${NEW_PORT}"
-    printf "👉 请输入【节点备注名称】(例如 香港CN2 或 越南原生，直接回车默认 %s): " "$DEFAULT_NAME"
+    printf "👉 请输入【节点备注名称】\n   [直接回车默认: %s]: " "$DEFAULT_NAME"
     read_input USER_NAME
     NODE_NAME="${USER_NAME:-$DEFAULT_NAME}"
-    NODE_NAME=$(printf '%s' "$NODE_NAME" | tr '|' '-')
+    NODE_NAME=$(printf '%s' "$NODE_NAME" | sed 's/|/｜/g')
 
     # 询问或确认服务器连接地址
     S_ADDR=$(get_or_detect_server_addr)
