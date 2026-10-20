@@ -229,6 +229,7 @@ show_help() {
     echo "  ldnat info                          # 查看已安装节点、转发规则与二维码"
     echo ""
     echo "【轻舟端侧协同与探针 (SubSkiff Agent)】:"
+    echo "  ldnat subskiff <URL> <Token>        # 一键静默绑定轻舟服务端、部署探针并开启上报"
     echo "  ldnat agent                         # 轻舟探针综合管理菜单 (绑定/部署/Crontab/日志)"
     echo "  ldnat sync                          # 立即同步本地最新节点链接至轻舟服务端"
     echo ""
@@ -1978,10 +1979,15 @@ configure_subskiff() {
     [ -n "$_INPUT_URL" ] || _INPUT_URL="$_CUR_URL"
     [ -n "$_INPUT_URL" ] || die "服务端地址不能为空。"
 
-    printf "请输入端侧通信 Token [%s]: " "${_CUR_TOKEN:-留空保持}"
+    if [ -n "$_CUR_TOKEN" ]; then
+        printf "请输入端侧通信 Token [留空保持现有: %s****]: " "${_CUR_TOKEN:0:4}"
+    else
+        echo "💡 提示: 通信 Token 需与 SubSkiff 后台【📡 探针集群】中的 Agent 上报密钥一致 (可直接从后台一键复制)"
+        printf "请输入端侧通信 Token: "
+    fi
     read_input _INPUT_TOKEN
     [ -n "$_INPUT_TOKEN" ] || _INPUT_TOKEN="$_CUR_TOKEN"
-    [ -n "$_INPUT_TOKEN" ] || die "Token 不能为空。"
+    [ -n "$_INPUT_TOKEN" ] || die "Token 不能为空，请从 SubSkiff 网页后台【📡 探针集群】复制密钥。"
 
     printf "请输入定时心跳上报间隔(秒) [%s]: " "$_CUR_INTERVAL"
     read_input _INPUT_INTERVAL
@@ -2006,6 +2012,54 @@ configure_subskiff() {
 EOF_JSON
     chmod 600 "$_AGENT_CFG"
     echo "✅ 轻舟连接配置已保存至: $_AGENT_CFG"
+}
+
+quick_bind_subskiff() {
+    _INPUT_URL="$1"
+    _INPUT_TOKEN="$2"
+    _INPUT_INTERVAL="${3:-300}"
+    _AGENT_CFG=$(get_subskiff_cfg)
+    _BASE_DIR=$(get_subskiff_dir)
+
+    [ -n "$_INPUT_URL" ] || die "服务端地址不能为空。"
+    [ -n "$_INPUT_TOKEN" ] || die "Token 不能为空。"
+
+    cat << EOF_JSON > "$_AGENT_CFG"
+{
+  "server_url": "${_INPUT_URL%/}",
+  "node_token": "$_INPUT_TOKEN",
+  "node_source": "$INFO_FILE",
+  "report_interval_sec": $_INPUT_INTERVAL,
+  "auto_sync_on_change": true,
+  "request_timeout_sec": 5
+}
+EOF_JSON
+    chmod 600 "$_AGENT_CFG"
+    echo "✅ 轻舟连接配置已成功保存！"
+    echo "  服务端地址: ${_INPUT_URL%/}"
+    echo "  通信 Token: ${_INPUT_TOKEN:0:4}****"
+    echo "  配置文件: $_AGENT_CFG"
+
+    # 若未安装探针，尝试自动拉取安装
+    _AGENT_BIN=$(get_subskiff_bin)
+    if [ ! -x "$_AGENT_BIN" ]; then
+        echo "[*] 检测到本地尚未安装 subskiff-agent 探针，正在自动拉取部署..."
+        install_subskiff_agent_bin || true
+    fi
+
+    # 自动配置 Crontab 周期上报
+    _INTERVAL_MIN=$((_INPUT_INTERVAL / 60))
+    [ "$_INTERVAL_MIN" -lt 1 ] && _INTERVAL_MIN=1
+    _CRON_LINE="*/$_INTERVAL_MIN * * * * cd \"$_BASE_DIR\" && ./subskiff-agent >> ./subskiff-agent.log 2>&1"
+    crontab -l 2>/dev/null | grep -v 'subskiff-agent' > /tmp/crontab.subskiff.$$ 2>/dev/null || true
+    echo "$_CRON_LINE" >> /tmp/crontab.subskiff.$$
+    crontab /tmp/crontab.subskiff.$$
+    rm -f /tmp/crontab.subskiff.$$
+    echo "✅ 已自动启用定时心跳上报 (每 ${_INTERVAL_MIN} 分钟)"
+
+    # 立即执行一次同步测试
+    echo "[*] 正在执行首次联通测试并同步节点..."
+    run_subskiff_once
 }
 
 install_subskiff_agent_bin() {
@@ -2393,7 +2447,12 @@ if [ "${1:-}" = "agent" ] || [ "${1:-}" = "subskiff" ]; then
             exit 0
             ;;
         config|bind)
-            configure_subskiff
+            shift
+            if [ "$#" -ge 2 ]; then
+                quick_bind_subskiff "$1" "$2" "${3:-300}"
+            else
+                configure_subskiff
+            fi
             exit 0
             ;;
         cron|status)
@@ -2405,8 +2464,14 @@ if [ "${1:-}" = "agent" ] || [ "${1:-}" = "subskiff" ]; then
             exit 0
             ;;
         *)
-            manage_subskiff_menu
-            exit 0
+            if [ -n "$_SUBCMD" ] && [ -n "${2:-}" ]; then
+                # 支持一键静默: ldnat subskiff <URL> <TOKEN> [INTERVAL]
+                quick_bind_subskiff "$_SUBCMD" "$2" "${3:-300}"
+                exit 0
+            else
+                manage_subskiff_menu
+                exit 0
+            fi
             ;;
     esac
 fi
