@@ -2034,8 +2034,12 @@ install_subskiff_agent_bin() {
     read_input _AGENT_URL
     if [ -z "$_AGENT_URL" ]; then
         _AGENT_CFG=$(get_subskiff_cfg)
-        if [ -f "$_AGENT_CFG" ] && command -v jq >/dev/null 2>&1; then
-            _SERVER_URL=$(jq -r '.server_url // empty' "$_AGENT_CFG" 2>/dev/null || true)
+        if [ -f "$_AGENT_CFG" ]; then
+            if command -v jq >/dev/null 2>&1; then
+                _SERVER_URL=$(jq -r '.server_url // empty' "$_AGENT_CFG" 2>/dev/null || true)
+            else
+                _SERVER_URL=$(grep -oE '"server_url"[[:space:]]*:[[:space:]]*"[^"]+"' "$_AGENT_CFG" 2>/dev/null | head -n1 | cut -d'"' -f4 || true)
+            fi
             if [ -n "$_SERVER_URL" ]; then
                 _AGENT_URL="${_SERVER_URL%/}/static/agent/subskiff-agent-linux-$_TARGET_ARCH"
             fi
@@ -2043,8 +2047,7 @@ install_subskiff_agent_bin() {
     fi
 
     if [ -z "$_AGENT_URL" ]; then
-        warn "未指定下载 URL，请先将编译好的 subskiff-agent 上传至: $_BASE_DIR"
-        return 1
+        _AGENT_URL="https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-$_TARGET_ARCH"
     fi
 
     echo "[*] 正在下载探针: $_AGENT_URL"
