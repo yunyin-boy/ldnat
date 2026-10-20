@@ -2200,20 +2200,20 @@ install_subskiff_agent_bin() {
         return 0
     fi
 
-    # 智能解析指定版本号 (自适应 0.2.0 与 v0.2.0)
-    _GH_URLS=()
+    # 智能解析指定版本号 (自适应 0.2.0 与 v0.2.0，兼容 POSIX sh)
     if [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && [ "$_SPEC_VER" != "main" ]; then
         _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
-        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}")
-        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}")
+        _U1="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
+        _U2="https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
     else
-        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-${_TARGET_ARCH}")
-        _GH_URLS+=("https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent")
+        _U1="https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-${_TARGET_ARCH}"
+        _U2="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent"
     fi
 
     _SUCCESS=false
     echo "[*] 正在从 GitHub Release 下载探针内核..."
-    for _U in "${_GH_URLS[@]}"; do
+    for _U in "$_U1" "$_U2"; do
+        [ -z "$_U" ] && continue
         echo "  尝试拉取: $_U"
         if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_AGENT_BIN.tmp" "$_U"; then
             if [ -s "$_AGENT_BIN.tmp" ] && [ $(wc -c < "$_AGENT_BIN.tmp") -ge 500000 ]; then
@@ -2435,15 +2435,16 @@ update_ldnat_script() {
         [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && _BRANCH="$_SPEC_VER"
     fi
 
-    _URLS=()
     if [ -n "$_BRANCH" ]; then
-        _URLS+=("https://raw.githubusercontent.com/jojhaa/ldnat/${_BRANCH}/ldnat.sh")
-        _URLS+=("https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_BRANCH}/ldnat.sh")
+        _U1="https://raw.githubusercontent.com/jojhaa/ldnat/${_BRANCH}/ldnat.sh"
+        _U2="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_BRANCH}/ldnat.sh"
+        _U3=""
+        _U4=""
     else
-        _URLS+=("https://raw.githubusercontent.com/jojhaa/ldnat/${_V_WITH_V}/ldnat.sh")
-        _URLS+=("https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_WITH_V}/ldnat.sh")
-        _URLS+=("https://raw.githubusercontent.com/jojhaa/ldnat/${_V_NO_V}/ldnat.sh")
-        _URLS+=("https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_NO_V}/ldnat.sh")
+        _U1="https://raw.githubusercontent.com/jojhaa/ldnat/${_V_WITH_V}/ldnat.sh"
+        _U2="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_WITH_V}/ldnat.sh"
+        _U3="https://raw.githubusercontent.com/jojhaa/ldnat/${_V_NO_V}/ldnat.sh"
+        _U4="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_NO_V}/ldnat.sh"
     fi
 
     _TMP_FILE="/tmp/ldnat_new.$.sh"
@@ -2451,7 +2452,8 @@ update_ldnat_script() {
     _SUCCESS=false
 
     echo "[*] 正在从 GitHub 拉取脚本代码..."
-    for _U in "${_URLS[@]}"; do
+    for _U in "$_U1" "$_U2" "$_U3" "$_U4"; do
+        [ -z "$_U" ] && continue
         echo "  尝试拉取: $_U"
         if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_TMP_FILE" "$_U"; then
             if [ -s "$_TMP_FILE" ] && [ $(wc -c < "$_TMP_FILE") -ge 20000 ] && grep -q 'register_command' "$_TMP_FILE"; then
