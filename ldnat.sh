@@ -3,6 +3,8 @@
 set -eu
 umask 077
 
+LDNAT_VERSION="v0.3.0"
+
 CONFIG_FILE="/etc/sing-box/config.json"
 NODES_CONF="/etc/sing-box/nodes.conf"
 ADDR_CONF="/etc/sing-box/server_addr"
@@ -392,6 +394,8 @@ DDNS_CONFIG_EOF
 #!/bin/sh
 set -eu
 umask 077
+
+LDNAT_VERSION="v0.3.0"
 CONFIG_FILE="/root/ddns/config.json"
 LOG_FILE="/root/ddns/ddns.log"
 CACHE_FILE="/root/ddns/last_ip.txt"
@@ -2196,23 +2200,41 @@ install_subskiff_agent_bin() {
     # 非强制更新模式下，若本地已存在可执行文件则跳过
     if [ "$_FORCE_UPDATE" != "force" ] && [ -f "$_BASE_DIR/subskiff-agent" ] && [ -s "$_BASE_DIR/subskiff-agent" ]; then
         chmod +x "$_AGENT_BIN"
-        echo "✅ 本地已存在 subskiff-agent 探针，权限已就绪！"
+        _CUR_V=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
+        echo "✅ 本地已存在 subskiff-agent 探针: $_CUR_V"
         return 0
     fi
 
-    # 智能解析指定版本号 (自适应 0.2.0 与 v0.2.0，兼容 POSIX sh)
-    if [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && [ "$_SPEC_VER" != "main" ]; then
-        _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
-        _U1="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
-        _U2="https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
-    else
-        _U1="https://github.com/jojhaa/ldnat/releases/download/v0.2.0/subskiff-agent-linux-${_TARGET_ARCH}"
-        _U2="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent"
-    fi
+    _U1=""
+    _U2=""
+    _U3=""
+    _U4=""
+
+    # 智能解析拉取模式 (自适应: 自定义直链 / 动态最新 latest / 指定版本号如 0.3.0 或 v0.3.0)
+    case "$_SPEC_VER" in
+        http://*|https://*)
+            echo "[*] 检测到自定义直链 URL: $_SPEC_VER"
+            _U1="$_SPEC_VER"
+            ;;
+        ""|latest|main|master)
+            echo "[*] 采用默认策略: 动态拉取 GitHub Releases 最新版 (latest)"
+            _U1="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent-linux-${_TARGET_ARCH}"
+            _U2="https://github.com/jojhaa/ldnat/releases/latest/download/subskiff-agent"
+            _U3="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@main/subskiff-agent"
+            ;;
+        *)
+            _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
+            echo "[*] 锁定拉取指定版本: v${_CLEAN_V}"
+            _U1="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
+            _U2="https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent-linux-${_TARGET_ARCH}"
+            _U3="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/subskiff-agent"
+            _U4="https://github.com/jojhaa/ldnat/releases/download/${_CLEAN_V}/subskiff-agent"
+            ;;
+    esac
 
     _SUCCESS=false
-    echo "[*] 正在从 GitHub Release 下载探针内核..."
-    for _U in "$_U1" "$_U2"; do
+    echo "[*] 正在从云端下载探针内核..."
+    for _U in "$_U1" "$_U2" "$_U3" "$_U4"; do
         [ -z "$_U" ] && continue
         echo "  尝试拉取: $_U"
         if curl -fksSL --connect-timeout 8 --max-time 60 --retry 1 -o "$_AGENT_BIN.tmp" "$_U"; then
@@ -2227,11 +2249,12 @@ install_subskiff_agent_bin() {
     if [ "$_SUCCESS" = true ]; then
         mv -f "$_AGENT_BIN.tmp" "$_AGENT_BIN"
         chmod +x "$_AGENT_BIN"
-        echo "✅ subskiff-agent 探针二进制已成功就绪并赋权！"
+        _NEW_V=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
+        echo "✅ subskiff-agent 探针二进制已成功就绪并赋权！($_NEW_V)"
         return 0
     else
         rm -f "$_AGENT_BIN.tmp"
-        warn "❌ 探针内核下载校验失败，已保留原文件，请检查版本号或网络连通性。"
+        warn "❌ 探针内核下载校验失败，已保留原文件，请检查版本号、直链或网络连通性。"
         return 1
     fi
 }
@@ -2359,8 +2382,13 @@ view_subskiff_status() {
 manage_subskiff_menu() {
     while true; do
         clear 2>/dev/null || true
+        _AGENT_BIN=$(get_subskiff_bin)
+        _AGENT_VER="未安装"
+        if [ -x "$_AGENT_BIN" ]; then
+            _AGENT_VER=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
+        fi
         echo "=========================================================="
-        echo "      📡 LDNAT - 轻舟云端协同与探针管理 (SubSkiff)         "
+        echo "   📡 LDNAT - 轻舟云端协同与探针管理 [内核: ${_AGENT_VER}]"
         echo "=========================================================="
         echo "  1. 绑定/修改 轻舟服务端连接 (URL 与 Node Token)"
         echo "  2. 部署/更新 轻舟探针 (Rust 静态 musl 二进制)"
@@ -2379,7 +2407,10 @@ manage_subskiff_menu() {
                 read_input _
                 ;;
             2)
-                install_subskiff_agent_bin force
+                echo ""
+                printf "👉 请输入版本号 (如 0.3.0 或 v0.3.0)、直链 URL\n   [直接回车默认拉取最新 Release]: "
+                read_input _P_VER
+                install_subskiff_agent_bin force "$_P_VER"
                 printf "\n按回车键继续..."
                 read_input _
                 ;;
@@ -2421,37 +2452,40 @@ update_ldnat_script() {
     echo "=========================================================="
     echo "      🔄 更新 ldnat.sh 脚本自身                           "
     echo "=========================================================="
+    echo "  当前脚本版本: $LDNAT_VERSION"
     echo "  本地目标路径: $_REAL_PATH"
 
-    _V_WITH_V=""
-    _V_NO_V=""
-    _BRANCH="main"
-    if [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && [ "$_SPEC_VER" != "main" ] && [ "$_SPEC_VER" != "master" ]; then
-        _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
-        _V_WITH_V="v${_CLEAN_V}"
-        _V_NO_V="${_CLEAN_V}"
-        _BRANCH=""
-    else
-        [ -n "$_SPEC_VER" ] && [ "$_SPEC_VER" != "latest" ] && _BRANCH="$_SPEC_VER"
-    fi
+    _U1=""
+    _U2=""
+    _U3=""
+    _U4=""
 
-    if [ -n "$_BRANCH" ]; then
-        _U1="https://raw.githubusercontent.com/jojhaa/ldnat/${_BRANCH}/ldnat.sh"
-        _U2="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_BRANCH}/ldnat.sh"
-        _U3=""
-        _U4=""
-    else
-        _U1="https://raw.githubusercontent.com/jojhaa/ldnat/${_V_WITH_V}/ldnat.sh"
-        _U2="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_WITH_V}/ldnat.sh"
-        _U3="https://raw.githubusercontent.com/jojhaa/ldnat/${_V_NO_V}/ldnat.sh"
-        _U4="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@${_V_NO_V}/ldnat.sh"
-    fi
+    case "$_SPEC_VER" in
+        http://*|https://*)
+            echo "[*] 检测到自定义脚本直链 URL: $_SPEC_VER"
+            _U1="$_SPEC_VER"
+            ;;
+        ""|latest|main|master)
+            echo "[*] 采用默认策略: 动态拉取 GitHub main/latest 最新脚本"
+            _U1="https://raw.githubusercontent.com/jojhaa/ldnat/main/ldnat.sh"
+            _U2="https://github.com/jojhaa/ldnat/releases/latest/download/ldnat.sh"
+            _U3="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@main/ldnat.sh"
+            ;;
+        *)
+            _CLEAN_V=$(printf '%s' "$_SPEC_VER" | sed 's/^[vV]//')
+            echo "[*] 锁定拉取指定版本: v${_CLEAN_V}"
+            _U1="https://github.com/jojhaa/ldnat/releases/download/v${_CLEAN_V}/ldnat.sh"
+            _U2="https://raw.githubusercontent.com/jojhaa/ldnat/v${_CLEAN_V}/ldnat.sh"
+            _U3="https://fastly.jsdelivr.net/gh/jojhaa/ldnat@v${_CLEAN_V}/ldnat.sh"
+            _U4="https://raw.githubusercontent.com/jojhaa/ldnat/${_CLEAN_V}/ldnat.sh"
+            ;;
+    esac
 
-    _TMP_FILE="/tmp/ldnat_new.$.sh"
+    _TMP_FILE="/tmp/ldnat_new.$$.sh"
     rm -f "$_TMP_FILE"
     _SUCCESS=false
 
-    echo "[*] 正在从 GitHub 拉取脚本代码..."
+    echo "[*] 正在从云端拉取脚本代码..."
     for _U in "$_U1" "$_U2" "$_U3" "$_U4"; do
         [ -z "$_U" ] && continue
         echo "  尝试拉取: $_U"
@@ -2474,13 +2508,14 @@ update_ldnat_script() {
         if [ "$_REAL_PATH" != "/usr/local/bin/ldnat" ]; then
             ln -sf "$_REAL_PATH" /usr/local/bin/ldnat
         fi
+        _NEW_VER=$(grep -m1 '^LDNAT_VERSION=' "$_REAL_PATH" 2>/dev/null | cut -d'"' -f2 || echo "最新版")
         echo "=========================================================="
-        echo "🎉 ldnat.sh 脚本已成功更新至最新！"
+        echo "🎉 ldnat.sh 脚本已成功更新至: $_NEW_VER"
         echo "=========================================================="
         return 0
     else
         rm -f "$_TMP_FILE"
-        warn "❌ 脚本拉取校验失败，已保留原本地文件，请检查版本号或网络连通性。"
+        warn "❌ 脚本拉取校验失败，已保留原本地文件，请检查版本号、直链或网络连通性。"
         return 1
     fi
 }
@@ -2509,11 +2544,16 @@ manage_update_menu() {
     while true; do
         clear 2>/dev/null || true
         _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+        _AGENT_BIN=$(get_subskiff_bin)
+        _AGENT_VER="未安装"
+        if [ -x "$_AGENT_BIN" ]; then
+            _AGENT_VER=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
+        fi
         echo "=========================================================="
         echo "      🔄 LDNAT 工具箱与探针组件更新中心                   "
         echo "=========================================================="
-        echo "  当前脚本位置: $_REAL_PATH"
-        echo "  当前探针内核: /usr/local/subskiff/subskiff-agent"
+        echo "  当前脚本版本: ${LDNAT_VERSION} (${_REAL_PATH})"
+        echo "  当前探针内核: ${_AGENT_VER} (${_AGENT_BIN})"
         echo ""
         echo "  1. 🚀 一键全量更新 (同时更新 ldnat.sh 脚本 + 轻舟探针内核) [默认推荐]"
         echo "  2. 仅更新 ldnat.sh 脚本自身"
@@ -2530,13 +2570,13 @@ manage_update_menu() {
                 ;;
             1)
                 echo ""
-                printf "👉 请输入目标版本号/分支 (例如 0.2.0 或 v0.2.0)\n   [直接回车默认拉取最新 main/latest]: "
+                printf "👉 请输入目标版本号 (如 0.3.0 或 v0.3.0) 或直链 URL\n   [直接回车默认拉取最新 latest/main]: "
                 read_input _USER_VER
                 update_all_components "$_USER_VER"
                 ;;
             2)
                 echo ""
-                printf "👉 请输入目标版本号/分支 (例如 0.2.0 或 v0.2.0)\n   [直接回车默认拉取最新 main 分支]: "
+                printf "👉 请输入目标版本号 (如 0.3.0 或 v0.3.0) 或直链 URL\n   [直接回车默认拉取最新 main/latest]: "
                 read_input _USER_VER
                 if update_ldnat_script "$_USER_VER"; then
                     _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
@@ -2550,7 +2590,7 @@ manage_update_menu() {
                 ;;
             3)
                 echo ""
-                printf "👉 请输入目标版本号 (例如 0.2.0 或 v0.2.0)\n   [直接回车默认拉取最新 Release]: "
+                printf "👉 请输入目标版本号 (如 0.3.0 或 v0.3.0) 或直链 URL\n   [直接回车默认拉取最新 Release]: "
                 read_input _USER_VER
                 install_subskiff_agent_bin force "$_USER_VER"
                 printf "\n按回车键继续..."
@@ -2566,6 +2606,21 @@ manage_update_menu() {
 
 
 # ==================== 命令行路由分支 ====================
+
+# 0. 版本查询分支 (-v / --version / version)
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+    echo "=========================================================="
+    echo "  🚀 LDNAT 工具箱版本: $LDNAT_VERSION"
+    _AGENT_BIN=$(get_subskiff_bin 2>/dev/null || echo "/usr/local/subskiff/subskiff-agent")
+    if [ -x "$_AGENT_BIN" ]; then
+        _AGENT_VER=$("$_AGENT_BIN" --version 2>/dev/null || echo "未知版本")
+        echo "  📡 轻舟端侧探针版本: $_AGENT_VER"
+    else
+        echo "  📡 轻舟端侧探针版本: [未安装]"
+    fi
+    echo "=========================================================="
+    exit 0
+fi
 
 # 1. 节点多端口与全协议管理分支
 if [ "${1:-}" = "node" ] || [ "${1:-}" = "nodes" ]; then
@@ -2838,7 +2893,7 @@ fi
 while true; do
     clear 2>/dev/null || true
     echo "=========================================================="
-    echo "      🚀 LDNAT - Alpine 落地与中转全能工具箱               "
+    echo "   🚀 LDNAT - Alpine 落地与中转全能工具箱 (${LDNAT_VERSION})"
     echo "=========================================================="
     echo "  1. 节点多端口与全协议服务管理 (REALITY/SS/AnyTLS/Hy2/TUIC/Trojan)"
     echo "  2. Realm 高性能多端口转发管理 (增/删/查/改/启停)"
