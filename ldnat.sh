@@ -893,15 +893,15 @@ set_server_addr() {
 }
 
 build_node_url() {
-    B_PORT="$1"
-    B_TYPE="$2"
-    B_NAME="$3"
-    B_P1="$4"
-    B_P2="$5"
-    B_P3="$6"
-    B_P4="$7"
-    B_P5="$8"
-    B_ADDR="$9"
+    B_PORT="${1:-}"
+    B_TYPE="${2:-}"
+    B_NAME="${3:-}"
+    B_P1="${4:-}"
+    B_P2="${5:-}"
+    B_P3="${6:-}"
+    B_P4="${7:-}"
+    B_P5="${8:-}"
+    B_ADDR="${9:-}"
 
     TAG="${B_NAME:-${B_ADDR}_${B_TYPE}_${B_PORT}}"
 
@@ -936,16 +936,16 @@ build_node_url() {
 }
 
 render_single_node_detail() {
-    R_INDEX="$1"
-    R_PORT="$2"
-    R_TYPE="$3"
-    R_NAME="$4"
-    R_P1="$5"
-    R_P2="$6"
-    R_P3="$7"
-    R_P4="$8"
-    R_P5="$9"
-    R_ADDR="${10}"
+    R_INDEX="${1:-}"
+    R_PORT="${2:-}"
+    R_TYPE="${3:-}"
+    R_NAME="${4:-}"
+    R_P1="${5:-}"
+    R_P2="${6:-}"
+    R_P3="${7:-}"
+    R_P4="${8:-}"
+    R_P5="${9:-}"
+    R_ADDR="${10:-}"
     R_SHOW_QR="${11:-true}"
 
     echo "------------------------------------------------------------------"
@@ -1513,8 +1513,13 @@ add_node_rule() {
     echo "          🎉 节点添加成功！服务检查已通过并已启动                "
     echo "================================================================"
     TOTAL_NODES=$(grep -c -v '^[[:space:]]*#' "$NODES_CONF" 2>/dev/null || true)
+    _D_P1=$(printf '%s' "$RECORD" | cut -d'|' -f4)
+    _D_P2=$(printf '%s' "$RECORD" | cut -d'|' -f5)
+    _D_P3=$(printf '%s' "$RECORD" | cut -d'|' -f6)
+    _D_P4=$(printf '%s' "$RECORD" | cut -d'|' -f7)
+    _D_P5=$(printf '%s' "$RECORD" | cut -d'|' -f8)
     render_single_node_detail "$TOTAL_NODES" "$NEW_PORT" "$TARGET_TYPE" "$NODE_NAME" \
-        $(printf '%s' "$RECORD" | awk -F'|' '{print $4, $5, $6, $7, $8}') "$S_ADDR" true
+        "$_D_P1" "$_D_P2" "$_D_P3" "$_D_P4" "$_D_P5" "$S_ADDR" true
     echo "================================================================"
     if is_abuse_block_enabled; then
         echo "🛡️ 安全审计护盾已生效 (已自动阻断 BT/PT、邮件SPAM、矿池及恶意扫描)"
