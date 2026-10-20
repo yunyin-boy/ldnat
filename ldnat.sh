@@ -2197,8 +2197,8 @@ install_subskiff_agent_bin() {
 
     echo "[*] 检测到系统架构: $_ARCH ($_TARGET_ARCH)"
 
-    # 非强制更新模式下，若本地已存在可执行文件则跳过
-    if [ "$_FORCE_UPDATE" != "force" ] && [ -f "$_BASE_DIR/subskiff-agent" ] && [ -s "$_BASE_DIR/subskiff-agent" ]; then
+    # 非强制更新模式下，若未指定版本且本地已存在可执行文件则跳过
+    if [ "$_FORCE_UPDATE" != "force" ] && [ -z "$_SPEC_VER" ] && [ -f "$_BASE_DIR/subskiff-agent" ] && [ -s "$_BASE_DIR/subskiff-agent" ]; then
         chmod +x "$_AGENT_BIN"
         _CUR_V=$("$_AGENT_BIN" --version 2>/dev/null || echo "已就绪")
         echo "✅ 本地已存在 subskiff-agent 探针: $_CUR_V"
@@ -2408,7 +2408,7 @@ manage_subskiff_menu() {
                 ;;
             2)
                 echo ""
-                printf "👉 请输入版本号 (如 0.3.0 或 v0.3.0)、直链 URL\n   [直接回车默认拉取最新 Release]: "
+                printf "👉 请输入目标版本号 (如 0.3.0 或 v0.3.0) 或直链 URL\n   [直接回车默认拉取最新 Release (latest)]: "
                 read_input _P_VER
                 install_subskiff_agent_bin force "$_P_VER"
                 printf "\n按回车键继续..."
@@ -2526,18 +2526,54 @@ update_all_components() {
     echo "      🚀 执行一键全量更新 (探针内核 + ldnat.sh 脚本)       "
     echo "=========================================================="
     
-    echo "[1/2] 正在更新 subskiff-agent 轻舟探针..."
-    install_subskiff_agent_bin force "$_SPEC_VER" || true
-    echo ""
+    # 智能分流: 若入参为具体直链 URL，自动识别是脚本还是探针
+    case "$_SPEC_VER" in
+        http://*.sh*|https://*.sh*|*ldnat.sh*)
+            echo "[*] 检测到传入直链为 ldnat.sh 脚本，执行脚本更新..."
+            if update_ldnat_script "$_SPEC_VER"; then
+                _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+                [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
+                echo "[*] 正在平滑无缝重载工具箱..."
+                sleep 1
+                exec "$_REAL_PATH"
+            fi
+            return 0
+            ;;
+        *subskiff*|*agent*)
+            echo "[*] 检测到传入直链为 subskiff-agent 探针，执行探针内核更新..."
+            install_subskiff_agent_bin force "$_SPEC_VER"
+            return 0
+            ;;
+        http://*|https://*)
+            echo "[*] 检测到自定义直链: $_SPEC_VER"
+            echo "[1/2] 正在尝试更新 subskiff-agent 探针内核..."
+            install_subskiff_agent_bin force "$_SPEC_VER" || true
+            echo ""
+            echo "[2/2] 正在尝试更新 ldnat.sh 脚本自身..."
+            if update_ldnat_script "$_SPEC_VER"; then
+                _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+                [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
+                echo "[*] 正在平滑无缝重载工具箱..."
+                sleep 1
+                exec "$_REAL_PATH"
+            fi
+            return 0
+            ;;
+        *)
+            echo "[1/2] 正在更新 subskiff-agent 轻舟探针..."
+            install_subskiff_agent_bin force "$_SPEC_VER" || true
+            echo ""
 
-    echo "[2/2] 正在更新 ldnat.sh 脚本自身..."
-    if update_ldnat_script "$_SPEC_VER"; then
-        _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
-        [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
-        echo "[*] 正在平滑无缝重载工具箱..."
-        sleep 1
-        exec "$_REAL_PATH"
-    fi
+            echo "[2/2] 正在更新 ldnat.sh 脚本自身..."
+            if update_ldnat_script "$_SPEC_VER"; then
+                _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+                [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
+                echo "[*] 正在平滑无缝重载工具箱..."
+                sleep 1
+                exec "$_REAL_PATH"
+            fi
+            ;;
+    esac
 }
 
 manage_update_menu() {
@@ -2827,7 +2863,13 @@ if [ "${1:-}" = "update" ] || [ "${1:-}" = "upgrade" ]; then
     case "$_TARGET_SUB" in
         script)
             shift
-            update_ldnat_script "${1:-}"
+            if update_ldnat_script "${1:-}"; then
+                _REAL_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+                [ -f "$_REAL_PATH" ] || _REAL_PATH="/usr/local/bin/ldnat"
+                echo "[*] 正在平滑无缝重载工具箱..."
+                sleep 1
+                exec "$_REAL_PATH"
+            fi
             exit 0
             ;;
         agent|subskiff)
@@ -2836,7 +2878,10 @@ if [ "${1:-}" = "update" ] || [ "${1:-}" = "upgrade" ]; then
             exit 0
             ;;
         *)
-            # 支持 ldnat update [version] 全量更新
+            # 命令行支持:
+            # 1. ldnat update             -> 默认全量最新 (latest / main)
+            # 2. ldnat update https://... -> 指定自定义链接 (自动分流脚本或探针)
+            # 3. ldnat update 0.3.0       -> 指定版本号全量更新
             update_all_components "$_TARGET_SUB"
             exit 0
             ;;
